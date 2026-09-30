@@ -1,0 +1,29 @@
+{
+  "name": "com.fouaph.hotreload",
+  "version": "1.0.0",
+  "displayName": "Hot Reload for Unity (x64)",
+  "description": "Zero-freeze sub-second C# Hot Reload for Unity using out-of-process Roslyn compiler and native x64 JIT method detouring.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "documentationUrl": "https://github.com/fouaph/unity-hot-reload#readme",
+  "changelogUrl": "https://github.com/fouaph/unity-hot-reload/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/fouaph/unity-hot-reload/blob/main/LICENSE.md",
+  "keywords": [
+    "hot-reload",
+    "csharp",
+    "productivity",
+    "live-code",
+    "compilation",
+    "developer-tools"
+  ],
+  "author": {
+    "name": "fouaph"
+  },
+  "samples": [
+    {
+      "displayName": "Hot Reload Demo",
+      "description": "Interactive example demonstrating runtime method patching and [HotReloaded] callbacks.",
+      "path": "Samples~/Demo"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Visual Studio / VS Code / Rider
+.vs/
+.idea/
+*.sln
+*.csproj
+*.user
+*.suo
+
+# Build & temp files
+bin/
+obj/
+Temp/
+Library/
+Logs/
+Packages/
+Build/
+Builds/
+UserSettings/
+MemoryCaptures/
+Recordings/
+
+# Meta files for root folder if any
+/.meta
