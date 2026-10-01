@@ -17,7 +17,7 @@ namespace HotReload.Editor
     /// <summary>
     /// Custom Inspector overlay that detects newly declared serialized fields in source code
     /// that have not yet been compiled into Unity's AppDomain, matching commercial Hot Reload inspector behavior.
-    /// Expression-bodied properties (e.g. public float speed => 10f;) and methods are automatically excluded.
+    /// Expression-bodied properties, methods, nested types, and sibling types are automatically excluded.
     /// </summary>
     [CustomEditor(typeof(MonoBehaviour), editorForChildClasses: true, isFallback = true)]
     [CanEditMultipleObjects]
@@ -26,16 +26,29 @@ namespace HotReload.Editor
         private static readonly Dictionary<string, (DateTime lastWrite, List<UncompiledFieldInfo> fields)> Cache =
             new Dictionary<string, (DateTime, List<UncompiledFieldInfo>)>();
 
-        // Matches field declarations: public string questId; or [SerializeField] private Button playButton;
-        // Specifically excludes properties (with => or { get; }) and methods
-        private static readonly Regex FieldRegex = new Regex(
-            @"(?:\[SerializeField\]\s*)?(?:public|private|protected)\s+(?!class|struct|enum|void|interface|delegate|event)([A-Za-z0-9_<>,\.\s]+?)\s+([A-Za-z0-9_]+)\s*(?:=[^;>]+)?;",
+        // Hanya mencocokkan Serialized Fields:
+        // 1. [SerializeField] (public/private/protected)
+        // 2. public fields biasa (bukan static, const, readonly, atau [NonSerialized])
+        private static readonly Regex SerializedFieldRegex = new Regex(
+            @"(?:\[SerializeField\][^\n;]*?\s*(?:public|private|protected|internal)?|\bpublic)\s+(?!class|struct|enum|void|interface|delegate|event|static|const|readonly)([A-Za-z0-9_<>,\.\[\]\s]+?)\s+([A-Za-z0-9_]+)\s*(?:=[^;>]+)?;",
             RegexOptions.Compiled
         );
+
+        [InitializeOnLoadMethod]
+        private static void InitLifecycle()
+        {
+            Cache.Clear();
+            AssemblyReloadEvents.beforeAssemblyReload += Cache.Clear;
+            AssemblyReloadEvents.afterAssemblyReload += Cache.Clear;
+            EditorApplication.playModeStateChanged += _ => Cache.Clear();
+        }
 
         public override void OnInspectorGUI()
         {
             base.OnInspectorGUI();
+
+            // Overlay ini HANYA aktif jika Hot Reload dijalankan secara manual DAN saat Play Mode
+            if (!HotReloadWatcher.IsEnabled || !EditorApplication.isPlaying) return;
 
             var mono = target as MonoBehaviour;
             if (mono == null) return;
@@ -56,10 +69,15 @@ namespace HotReload.Editor
 
                 using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
                 {
-                    EditorGUILayout.LabelField("Hot Reload Fields (enter Play Mode or Recompile to edit)", EditorStyles.miniBoldLabel);
+                    EditorGUILayout.LabelField("Hot Reload Fields (exit Play Mode or Recompile to edit)", EditorStyles.miniBoldLabel);
                     if (GUILayout.Button("Recompile", EditorStyles.miniButton, GUILayout.Width(75)))
                     {
+                        Cache.Clear();
+                        HotReloadWatcher.UnlockAssemblies();
+                        UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilation();
                         AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+                        EditorUtility.RequestScriptReload();
+                        GUIUtility.ExitGUI();
                     }
                 }
 
@@ -76,8 +94,9 @@ namespace HotReload.Editor
         private static List<UncompiledFieldInfo> GetUncompiledFields(string filePath, Type compiledType)
         {
             DateTime writeTime = File.GetLastWriteTimeUtc(filePath);
+            string cacheKey = $"{filePath}|{compiledType.FullName}";
 
-            if (Cache.TryGetValue(filePath, out var cached) && cached.lastWrite == writeTime)
+            if (Cache.TryGetValue(cacheKey, out var cached) && cached.lastWrite == writeTime)
             {
                 return cached.fields;
             }
@@ -87,52 +106,43 @@ namespace HotReload.Editor
             try
             {
                 string code = File.ReadAllText(filePath);
-                var matches = FieldRegex.Matches(code);
 
-                // Collect existing compiled fields, properties, and methods on the active type, its nested types, and sibling types
+                // Strip comments
+                code = Regex.Replace(code, @"/\*.*?\*/", "", RegexOptions.Singleline);
+                code = Regex.Replace(code, @"//.*", "");
+
+                // Hanya ekstrak isi langsung dari class target (abaikan nested class/struct/method)
+                string classBody = ExtractDirectClassBody(code, compiledType.Name);
+                if (string.IsNullOrEmpty(classBody))
+                {
+                    Cache[cacheKey] = (writeTime, uncompiledList);
+                    return uncompiledList;
+                }
+
+                // Kumpulkan field terkompilasi yang sudah ada di runtime
                 var existingMembers = new HashSet<string>(StringComparer.Ordinal);
                 const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 
-                void AddTypeMembers(Type t)
+                for (Type t = compiledType; t != null && t != typeof(MonoBehaviour); t = t.BaseType)
                 {
-                    if (t == null) return;
                     foreach (var f in t.GetFields(flags)) existingMembers.Add(f.Name);
                     foreach (var p in t.GetProperties(flags)) existingMembers.Add(p.Name);
                     foreach (var m in t.GetMethods(flags)) existingMembers.Add(m.Name);
-                    foreach (var nested in t.GetNestedTypes(flags))
-                    {
-                        AddTypeMembers(nested);
-                    }
                 }
 
-                AddTypeMembers(compiledType);
-
-                // Also check any sibling types or structs declared in the same source file
-                var classMatches = Regex.Matches(code, @"\b(?:class|struct|enum|interface)\s+([A-Za-z0-9_]+)");
-                var declaredNames = new HashSet<string>(StringComparer.Ordinal);
-                foreach (Match cm in classMatches)
-                {
-                    if (cm.Groups.Count > 1) declaredNames.Add(cm.Groups[1].Value);
-                }
-
-                try
-                {
-                    foreach (var asmType in compiledType.Assembly.GetTypes())
-                    {
-                        if (declaredNames.Contains(asmType.Name))
-                        {
-                            AddTypeMembers(asmType);
-                        }
-                    }
-                }
-                catch { }
-
+                var matches = SerializedFieldRegex.Matches(classBody);
                 foreach (Match m in matches)
                 {
                     string matchText = m.Value;
 
-                    // Exclude properties (expression-bodied => or get/set blocks) and methods
+                    // Abaikan properties dan methods
                     if (matchText.Contains("=>") || matchText.Contains("{") || matchText.Contains("("))
+                    {
+                        continue;
+                    }
+
+                    // Abaikan [NonSerialized]
+                    if (matchText.Contains("[NonSerialized]"))
                     {
                         continue;
                     }
@@ -142,7 +152,6 @@ namespace HotReload.Editor
                         string typeName = m.Groups[1].Value.Trim();
                         string fieldName = m.Groups[2].Value.Trim();
 
-                        // Skip if the member already exists or is a property
                         if (existingMembers.Contains(fieldName))
                         {
                             continue;
@@ -171,8 +180,66 @@ namespace HotReload.Editor
                 // Fallback gracefully on file read lock
             }
 
-            Cache[filePath] = (writeTime, uncompiledList);
+            Cache[cacheKey] = (writeTime, uncompiledList);
             return uncompiledList;
+        }
+
+        private static string ExtractDirectClassBody(string code, string className)
+        {
+            var match = Regex.Match(code, $@"\bclass\s+{Regex.Escape(className)}\b[^{{]*\{{");
+            if (!match.Success) return "";
+
+            int startIndex = match.Index + match.Length;
+            int depth = 1;
+            var sb = new System.Text.StringBuilder();
+
+            for (int i = startIndex; i < code.Length; i++)
+            {
+                char c = code[i];
+
+                if (c == '"')
+                {
+                    i++;
+                    while (i < code.Length && code[i] != '"')
+                    {
+                        if (code[i] == '\\') i++;
+                        i++;
+                    }
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    i++;
+                    while (i < code.Length && code[i] != '\'')
+                    {
+                        if (code[i] == '\\') i++;
+                        i++;
+                    }
+                    continue;
+                }
+
+                if (c == '{')
+                {
+                    depth++;
+                    continue;
+                }
+                else if (c == '}')
+                {
+                    depth--;
+                    if (depth == 0) break;
+                    continue;
+                }
+
+                // Hanya ambil karakter di level class utama (depth == 1)
+                // Nested classes, nested structs, methods, dan property blocks otomatis dilewati
+                if (depth == 1)
+                {
+                    sb.Append(c);
+                }
+            }
+
+            return sb.ToString();
         }
     }
 }
