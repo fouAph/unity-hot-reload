@@ -89,22 +89,43 @@ namespace HotReload.Editor
                 string code = File.ReadAllText(filePath);
                 var matches = FieldRegex.Matches(code);
 
-                // Collect existing compiled fields, properties, and methods on the active type
+                // Collect existing compiled fields, properties, and methods on the active type, its nested types, and sibling types
                 var existingMembers = new HashSet<string>(StringComparer.Ordinal);
                 const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 
-                foreach (var f in compiledType.GetFields(flags))
+                void AddTypeMembers(Type t)
                 {
-                    existingMembers.Add(f.Name);
+                    if (t == null) return;
+                    foreach (var f in t.GetFields(flags)) existingMembers.Add(f.Name);
+                    foreach (var p in t.GetProperties(flags)) existingMembers.Add(p.Name);
+                    foreach (var m in t.GetMethods(flags)) existingMembers.Add(m.Name);
+                    foreach (var nested in t.GetNestedTypes(flags))
+                    {
+                        AddTypeMembers(nested);
+                    }
                 }
-                foreach (var p in compiledType.GetProperties(flags))
+
+                AddTypeMembers(compiledType);
+
+                // Also check any sibling types or structs declared in the same source file
+                var classMatches = Regex.Matches(code, @"\b(?:class|struct|enum|interface)\s+([A-Za-z0-9_]+)");
+                var declaredNames = new HashSet<string>(StringComparer.Ordinal);
+                foreach (Match cm in classMatches)
                 {
-                    existingMembers.Add(p.Name);
+                    if (cm.Groups.Count > 1) declaredNames.Add(cm.Groups[1].Value);
                 }
-                foreach (var m in compiledType.GetMethods(flags))
+
+                try
                 {
-                    existingMembers.Add(m.Name);
+                    foreach (var asmType in compiledType.Assembly.GetTypes())
+                    {
+                        if (declaredNames.Contains(asmType.Name))
+                        {
+                            AddTypeMembers(asmType);
+                        }
+                    }
                 }
+                catch { }
 
                 foreach (Match m in matches)
                 {
