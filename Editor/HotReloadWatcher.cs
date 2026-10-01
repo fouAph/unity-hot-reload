@@ -25,18 +25,49 @@ namespace HotReload.Editor
 
         public static bool IsEnabled
         {
-            get => EditorPrefs.GetBool(PrefKeyEnabled, true);
+            get => EditorPrefs.GetBool(PrefKeyEnabled, false);
             set
             {
-                bool prev = EditorPrefs.GetBool(PrefKeyEnabled, true);
+                bool prev = EditorPrefs.GetBool(PrefKeyEnabled, false);
                 EditorPrefs.SetBool(PrefKeyEnabled, value);
                 if (value) StartEngine(!prev);
                 else StopEngine();
             }
         }
 
+        [MenuItem("Tools/Hot Reload/Start Hot Reload", priority = 10)]
+        public static void StartHotReloadMenu()
+        {
+            IsEnabled = true;
+        }
+
+        [MenuItem("Tools/Hot Reload/Start Hot Reload", true)]
+        public static bool ValidateStartHotReloadMenu() => !IsEnabled;
+
+        [MenuItem("Tools/Hot Reload/Stop Hot Reload", priority = 11)]
+        public static void StopHotReloadMenu()
+        {
+            IsEnabled = false;
+        }
+
+        [MenuItem("Tools/Hot Reload/Stop Hot Reload", true)]
+        public static bool ValidateStopHotReloadMenu() => IsEnabled;
+
+        [MenuItem("Tools/Hot Reload/Toggle Hot Reload", priority = 12)]
+        public static void ToggleHotReload()
+        {
+            IsEnabled = !IsEnabled;
+        }
+
         public static void StartEngine(bool recordHistory = true)
         {
+            // Configure Script Changes While Playing only when user explicitly starts Hot Reload
+            if (EditorPrefs.GetInt("ScriptCompilationDuringPlay", 0) == 2)
+            {
+                EditorPrefs.SetInt("ScriptCompilationDuringPlay", 1);
+                HotReloadLogger.LogInfo("Set 'Script Changes While Playing' to 'Recompile After Finished Playing'.");
+            }
+
             StartWatcher();
             if (EditorApplication.isPlaying && LockDomainReloadInPlayMode)
             {
@@ -99,20 +130,8 @@ namespace HotReload.Editor
 
         static HotReloadWatcher()
         {
-            EditorApplication.delayCall += () =>
-            {
-                // Ensure Unity does not stop Play Mode when scripts change
-                if (EditorPrefs.GetInt("ScriptCompilationDuringPlay", 0) == 2)
-                {
-                    EditorPrefs.SetInt("ScriptCompilationDuringPlay", 1);
-                    HotReloadLogger.LogInfo("Set 'Script Changes While Playing' to 'Recompile After Finished Playing' so Unity will not stop Play Mode on save.");
-                }
-
-                if (IsEnabled)
-                {
-                    StartWatcher();
-                }
-            };
+            // Hot Reload is strictly manual: default to inactive on domain reload or startup
+            EditorPrefs.SetBool(PrefKeyEnabled, false);
 
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
             AssemblyReloadEvents.beforeAssemblyReload += Cleanup;

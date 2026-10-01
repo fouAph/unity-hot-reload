@@ -5,6 +5,16 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-10-01
+
+### Fixed
+- **Direct Class Scope Filtering**: Refactored uncompiled field detection using `ExtractDirectClassBody` at `depth == 1` to strictly ignore nested classes, nested structs, and method bodies.
+- **Manual Execution Control**: Hot Reload now runs strictly when manually started, defaulting to inactive on domain reload/startup.
+- **Inspector Overlay Guard**: Inspector overlay is only active when Hot Reload is explicitly started and in Play Mode.
+
+### Removed
+- **SyncProjectFiles**: Removed obsolete project files generator script.
+
 ## [1.0.1] - 2026-10-01
 
 ### Fixed
